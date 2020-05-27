@@ -7,23 +7,43 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/profiles/latest/compute/mgmt/compute"
-	"github.com/Azure/azure-sdk-for-go/profiles/latest/network/mgmt/network"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2019-07-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2019-09-01/network"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
 	"github.com/Azure/go-autorest/autorest/to"
 )
 
+//OS object
 type OS struct {
 	Publisher string
 	Offer     string
 	Sku       string
 }
 
+var (
+	provider  = "az"
+	avSku     = "aligned"
+	azRegion  = "eastus"
+	rgNetwork = "az-nonProd-rg-001"
+)
+
+//GetVM returns a VM object and error of any
+func GetVM(ctx context.Context, subscription string, payload AZrequest) (compute.VirtualMachine, error) {
+	client := vmClient(subscription)
+	result, err := client.Get(ctx, payload.RG, payload.VMname, "")
+	if err != nil {
+		return compute.VirtualMachine{}, err
+	}
+	return result, nil
+}
+
 //GetImageVersion returns image version.
-func GetImageVersion(ctx context.Context, pubnoffer OS, os, region, subscription string, ch chan *[]compute.VirtualMachineImageResource) (string, string) {
-	go GetVMimages(ctx, region, pubnoffer.Publisher, pubnoffer.Offer, pubnoffer.Sku, subscription, ch)
-	versn := (*<-ch)
-	return pubnoffer.Sku, *versn[len(versn)-1].Name
+func GetImageVersion(ctx context.Context, pubnoffer OS, os, region, subscription string) (string, string, error) {
+	versn, err := GetVMimages(ctx, region, pubnoffer.Publisher, pubnoffer.Offer, pubnoffer.Sku, subscription)
+	if err != nil {
+		return "", "", err
+	}
+	return pubnoffer.Sku, *(*versn)[len(*versn)-1].Name, nil
 }
 
 //GetImagePubOfferSku returns Publisher and Offer
@@ -58,6 +78,7 @@ func GetDisks(disklist *string, vmname string) []compute.DataDisk {
 	sizes := strings.Split(*disklist, ",")
 	disks := make([]compute.DataDisk, 0)
 	for i, v := range sizes {
+		v = strings.TrimSuffix(strings.ToLower(v), "gb")
 		size, err := strconv.Atoi(v)
 		if err != nil {
 			panic(err)
@@ -267,7 +288,7 @@ func CreateAVS(ctx context.Context, name, rg, sku, loc, subscription string, ch 
 }
 
 //GetVMimages makes a call to azure and sends image details over a chan
-func GetVMimages(ctx context.Context, region, publisher, offer, skus, subscription string, ch chan *[]compute.VirtualMachineImageResource) {
+func GetVMimages(ctx context.Context, region, publisher, offer, skus, subscription string) (*[]compute.VirtualMachineImageResource, error) {
 	client := compute.NewVirtualMachineImagesClient(subscription)
 	authorizer, err := auth.NewAuthorizerFromCLI()
 	if err == nil {
@@ -276,10 +297,9 @@ func GetVMimages(ctx context.Context, region, publisher, offer, skus, subscripti
 	//defer errRecover()
 	result, err := client.List(ctx, region, publisher, offer, skus, "", nil, "")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	ch <- result.Value
-	close(ch)
+	return result.Value, nil
 }
 
 //GetSubnetName returns subnet name and an error.
@@ -287,8 +307,8 @@ func GetSubnetName(tier, envname string) (string, error) {
 	baseAppSub := []string{"az-base-sub-001", "az-base-app-sub-002"}
 	ProdAppSub := []string{"az-Prod-sub-001", "az-Prod-app-sub-002"}
 	nonProdAppSub := []string{"az-nonProd-sub-001", "az-nonProd-app-sub-002"}
-	envname = strings.ToLower(envname)
-	tiername := strings.ToLower(tier)
+	envname = strings.TrimSpace(strings.ToLower(envname))
+	tiername := strings.TrimSpace(strings.ToLower(tier))
 	switch {
 	case envname == "nonprod" && tiername == "app":
 		return nonProdAppSub[1], nil
@@ -310,7 +330,7 @@ func GetSubnetName(tier, envname string) (string, error) {
 //GetNetwork returns a vnet name or an error.
 func GetNetwork(envname string) (string, error) {
 	network := []string{"az-base-vnet-001", "az-nonProd-vnet-001", "az-Prod-vnet-001"}
-	envname = strings.ToLower(envname)
+	envname = strings.TrimSpace(strings.ToLower(envname))
 	switch {
 	case envname == "base":
 		return network[0], nil
@@ -348,4 +368,32 @@ func errRecover() {
 		fmt.Println(strings.Repeat("💀", 20))
 		//os.Exit(1) //optional, if you want to stop the excution if error occurs.
 	}
+}
+
+func getImageVersion(ctx context.Context, pubnoffer OS, ch chan *[]compute.VirtualMachineImageResource, subscription, region string) []AZimages {
+	go getVMimages(ctx, region, pubnoffer.Publisher, pubnoffer.Offer, pubnoffer.Sku, subscription, ch)
+	versn := (*<-ch)
+	img := AZimages{}
+	versions := make([]AZimages, len(versn))
+	for i, v := range versn {
+		img.Name = *v.Name
+		img.Ver = pubnoffer.Sku
+		versions[i] = img
+	}
+	return versions
+}
+
+func getVMimages(ctx context.Context, region, publisher, offer, skus, subscription string, ch chan *[]compute.VirtualMachineImageResource) {
+	client := compute.NewVirtualMachineImagesClient(subscription)
+	authorizer, err := auth.NewAuthorizerFromCLI()
+	if err == nil {
+		client.Authorizer = authorizer
+	}
+	defer errRecover()
+	result, err := client.List(ctx, region, publisher, offer, skus, "", nil, "")
+	if err != nil {
+		panic(err)
+	}
+	ch <- result.Value
+	close(ch)
 }
