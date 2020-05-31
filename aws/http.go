@@ -84,7 +84,7 @@ func Post(w http.ResponseWriter, r *http.Request, cfg aws.Config, payload AWSreq
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	w.Write(data)
 }

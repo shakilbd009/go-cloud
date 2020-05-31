@@ -56,8 +56,8 @@ func Get(w http.ResponseWriter, r *http.Request, subscription string, payload AZ
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
 
@@ -131,8 +131,8 @@ func Post(w http.ResponseWriter, r *http.Request, subscription, username, passwd
 				w.Write([]byte("something went wrong, please try again later"))
 				return
 			}
-			w.WriteHeader(http.StatusCreated)
 			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
 			w.Write(data)
 			done := time.Since(now)
 			fmt.Printf("Time took: %.2f minutes", done.Minutes())
