@@ -1,10 +1,13 @@
 package aws
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 )
 
 //AWSrequest object
@@ -19,6 +22,16 @@ type AWSrequest struct {
 	AppCode      string `json:"appCode"`
 	ChangeNum    string `json:"requestNum"`
 	InstanceType string `json:"instanceType"`
+	InstanceName string
+	Provider     string
+	VPCid        *string
+	SubnetID     *string
+	SecurityGID  *string
+	AmiID        *string
+	Key          *string
+	DisksF       []ec2.BlockDeviceMapping
+	Config       aws.Config
+	Ctx          context.Context
 }
 
 //AWSresponse object
@@ -28,63 +41,44 @@ type AWSresponse struct {
 	NetworkInterfaces string `json:"networkInterfaces,omitempty"`
 }
 
-//Post makes a POST request to aws api.
-func Post(w http.ResponseWriter, r *http.Request, cfg aws.Config, payload AWSrequest, provider, key string) {
+type BuildFunc func() error
 
-	vpcID, err := GetVpcID(r.Context(), cfg, payload.Environment)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+func Builder(fns ...BuildFunc) error {
+	for _, fn := range fns {
+		if err := fn(); err != nil {
+			return err
+		}
 	}
-	subnet, err := GetSubnet(r.Context(), cfg, vpcID, payload.Tier)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	amiID, err := GetAMI(r.Context(), cfg, payload.Osname, payload.OsFlavor)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	sgID, err := GetSecurityGroup(r.Context(), cfg, vpcID, payload.Tier)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	disks, err := PrepareDisks(payload.Disks)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	instanceName, err := GetInstanceName(provider, payload.Environment, payload.Osname, payload.AppCode)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	status, err := CreateEC2(r.Context(), cfg, instanceName, subnet, amiID, key, sgID, payload.Environment, payload.ChangeNum, payload.InstanceType, payload.Min, payload.Max, disks)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	responses := make([]AWSresponse, 0)
-	for _, v := range status.Instances {
-		state, err := v.State.Name.MarshalValue()
+	return nil
+}
+
+//Post makes a POST request to aws api.
+func Post(w http.ResponseWriter, payload AWSrequest) {
+
+	if err := Builder(
+		payload.GetVpcID,
+		payload.GetSubnet,
+		payload.GetAMI,
+		payload.GetSecurityGroup,
+		payload.PrepareDisks,
+		payload.GetInstanceName,
+	); err == nil {
+		responses, err := payload.BuildEC2()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		responses = append(responses, AWSresponse{
-			InstanceName:      *v.InstanceId,
-			Status:            state,
-			NetworkInterfaces: *v.NetworkInterfaces[0].PrivateIpAddress,
-		})
-	}
-	data, err := json.MarshalIndent(responses, "", "  ")
-	if err != nil {
+		data, err := json.MarshalIndent(responses, "", "  ")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(data)
+	} else {
+		fmt.Println("error happend here")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	w.Write(data)
 }
