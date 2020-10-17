@@ -60,10 +60,12 @@ func awsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	payload.Ctx = r.Context()
+	payload.Provider = provider
+	payload.Config = cfg
 	if r.Method == http.MethodPost {
-		aws.Post(w, r, cfg, payload, provider, key)
+		aws.Post(w, payload)
 	}
-
 }
 
 func gcpHandler(w http.ResponseWriter, r *http.Request) {
